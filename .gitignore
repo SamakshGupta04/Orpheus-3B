@@ -1,0 +1,21 @@
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated audio / model artifacts
+output_cloned_voice.wav
+output_fallback_tts.wav
+*.wav
+*.mp3
+*.m4a
+*.flac
