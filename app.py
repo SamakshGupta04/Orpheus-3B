@@ -274,6 +274,29 @@ def get_outputs_dir() -> str:
     return st.session_state.get("outputs_dir", "outputs")
 
 
+def resolve_model_dir(outputs_dir: str, model_key: str) -> str:
+    """Resolve a model's output directory, tolerating naming variants.
+
+    Tries, in order: `<model_key>_outputs/`, `<model_key>/`, then case
+    variants. Falls back to `<model_key>/` if none exist.
+    """
+    candidates = [
+        f"{model_key}_outputs",
+        model_key,
+        f"{model_key}-outputs",
+        model_key.upper(),
+    ]
+    for name in candidates:
+        path = os.path.join(outputs_dir, name)
+        if os.path.isdir(path):
+            return path
+    return os.path.join(outputs_dir, model_key)
+
+
+# Default reference audio bundled in the outputs folder
+DEFAULT_REF_AUDIO = os.path.join("outputs", "orpheus_voxcpm_sample_audio.mp3")
+
+
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
@@ -360,8 +383,10 @@ outputs_dir = get_outputs_dir()
 model_metadata = {}
 model_available = {}
 
+model_dirs = {}
 for model_key in MODELS:
-    model_dir = os.path.join(outputs_dir, model_key)
+    model_dir = resolve_model_dir(outputs_dir, model_key)
+    model_dirs[model_key] = model_dir
     meta = load_metadata(model_dir)
     model_metadata[model_key] = meta
     model_available[model_key] = meta is not None
@@ -379,7 +404,18 @@ st.markdown(
 )
 
 # ─── Original Reference Audio Player ────────────────────────────────────────
+# Prefer an uploaded clip; otherwise fall back to the bundled sample audio.
 if "ref_audio_data" in st.session_state:
+    ref_data = st.session_state["ref_audio_data"]
+    ref_type = st.session_state.get("ref_audio_type", "audio/mpeg")
+elif os.path.exists(DEFAULT_REF_AUDIO):
+    with open(DEFAULT_REF_AUDIO, "rb") as f:
+        ref_data = f.read()
+    ref_type = "audio/mpeg"
+else:
+    ref_data = None
+
+if ref_data is not None:
     st.markdown(
         """
         <div class="reference-card">
@@ -392,8 +428,6 @@ if "ref_audio_data" in st.session_state:
         """,
         unsafe_allow_html=True,
     )
-    ref_data = st.session_state["ref_audio_data"]
-    ref_type = st.session_state.get("ref_audio_type", "audio/mpeg")
     st.audio(ref_data, format=ref_type)
     st.markdown("")
 
@@ -522,7 +556,7 @@ for test in filtered_texts:
                 )
             else:
                 wav_path = os.path.join(
-                    outputs_dir, model_key, result.get("wav_file", f"test_{test_id:02d}.wav")
+                    model_dirs[model_key], result.get("wav_file", f"test_{test_id:02d}.wav")
                 )
                 if os.path.exists(wav_path):
                     st.audio(wav_path, format="audio/wav")

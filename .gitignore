@@ -13,9 +13,6 @@ env/
 .ipynb_checkpoints/
 
 # Generated audio / model artifacts
-output_cloned_voice.wav
-output_fallback_tts.wav
-*.wav
-*.mp3
-*.m4a
-*.flac
+
+*.pptx
+.DS_Store

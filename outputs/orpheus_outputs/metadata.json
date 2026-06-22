@@ -1,0 +1,138 @@
+{
+  "model": "orpheus",
+  "model_name": "unsloth/orpheus-3b-0.1-pretrained",
+  "results": [
+    {
+      "id": 1,
+      "text": "Your ticket number is B 4 7 2 9 and the fare is rupees three thousand two hundred.",
+      "language": "English",
+      "category": "Booking Confirmation",
+      "wav_file": "test_01.wav",
+      "generation_time_sec": 37.69,
+      "audio_duration_sec": 7.0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 2,
+      "text": "Thank you for calling customer support. Your query has been registered and our team will get back to you within twenty four hours. We apologise for the inconvenience caused.",
+      "language": "English",
+      "category": "Customer Support",
+      "wav_file": "test_02.wav",
+      "generation_time_sec": 43.71,
+      "audio_duration_sec": 9.98,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 3,
+      "text": "Departure at 06:45 AM on 3rd February 2025",
+      "language": "English",
+      "category": "Flight Details",
+      "wav_file": "test_03.wav",
+      "generation_time_sec": 31.69,
+      "audio_duration_sec": 7.51,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 4,
+      "text": "Aapki booking confirm ho gayi. Reference number note kar lijiye: B 4 9 2 1.",
+      "language": "Hindi",
+      "category": "Booking Confirmation",
+      "wav_file": "test_04.wav",
+      "generation_time_sec": 30.2,
+      "audio_duration_sec": 7.17,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 5,
+      "text": "Namaskar aur hamare service mein aapka swagat hai. Aapka loan application approved ho gaya hai. Amount aapke registered account mein do se teen working days mein credit ho jayega. Kisi bhi sahayta ke liye humse contact karein.",
+      "language": "Hindi",
+      "category": "Loan / Finance",
+      "wav_file": "test_05.wav",
+      "generation_time_sec": 64.66,
+      "audio_duration_sec": 14.59,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 6,
+      "text": "Flight booking ke liye 1 dabayen. Flight status ke liye 2 dabayen. Cancellation ke liye 3 dabayen.",
+      "language": "Hindi",
+      "category": "IVR Menu",
+      "wav_file": "test_06.wav",
+      "generation_time_sec": 35.87,
+      "audio_duration_sec": 8.19,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 7,
+      "text": "Dhanyavaad IndiGo ko call karne ke liye. Aapka din mangalmay ho.",
+      "language": "Hindi",
+      "category": "Call Closing",
+      "wav_file": "test_07.wav",
+      "generation_time_sec": 15.84,
+      "audio_duration_sec": 3.84,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 8,
+      "text": "Aapka PNR number hai A B 1 2 3 4. Ise save kar lijiye.",
+      "language": "Hindi",
+      "category": "Booking Confirmation",
+      "wav_file": "test_08.wav",
+      "generation_time_sec": 40.21,
+      "audio_duration_sec": 9.05,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 9,
+      "text": "Kya aap travel insurance add karna chahenge? Yeh sirf rupees 299 mein available hai.",
+      "language": "Hindi",
+      "category": "Upsell / Add-on",
+      "wav_file": "test_09.wav",
+      "generation_time_sec": 27.4,
+      "audio_duration_sec": 6.31,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 10,
+      "text": "Yeh final boarding call hai passengers Mr. Sharma aur Mrs. Gupta ke liye, flight 6E 888 ke liye gate C 3 par.",
+      "language": "Hindi",
+      "category": "Boarding Announcement",
+      "wav_file": "test_10.wav",
+      "generation_time_sec": 64.97,
+      "audio_duration_sec": 14.59,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 11,
+      "text": "IndiGo BluChip Gold members aur business class passengers priority boarding le sakte hain.",
+      "language": "Hindi",
+      "category": "Boarding Announcement",
+      "wav_file": "test_11.wav",
+      "generation_time_sec": 22.47,
+      "audio_duration_sec": 5.38,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 12,
+      "text": "IndiGo wallet mein minimum rupees 500 add kar sakte hain future bookings ke liye.",
+      "language": "Hindi",
+      "category": "Wallet / Payment",
+      "wav_file": "test_12.wav",
+      "generation_time_sec": 25.51,
+      "audio_duration_sec": 5.89,
+      "status": "success",
+      "error": null
+    }
+  ]
+}
