@@ -1,0 +1,25 @@
+# Heavy ML dependencies for neural voice-cloning evaluation metrics.
+# Install into a dedicated Python 3.11/3.12 venv (NOT the Streamlit venv):
+#   python3.12 -m venv .venv-metrics
+#   .venv-metrics/bin/python -m pip install -r requirements-metrics.txt
+#
+# These power compute_metrics.py:
+#   - resemblyzer  -> SECS speaker similarity (neural speaker embeddings)
+#   - faster-whisper -> WER / CER (ASR transcription)
+#   - torch/torchaudio -> UTMOS naturalness predictor (torch.hub)
+#   - librosa/soundfile/scipy -> acoustic metrics + audio I/O
+numpy<2
+torch
+torchaudio
+resemblyzer
+faster-whisper
+librosa
+soundfile
+scipy
+jiwer
+certifi
+# Hindi WER/CER: romanize Whisper's Devanagari output -> Latin (deterministic
+# direction) and compare in a phonetic-normalized space against the romanized
+# reference. word2number normalizes spelled-out English numbers ("3200").
+indic-transliteration
+word2number
