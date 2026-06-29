@@ -1,8 +1,7 @@
 """
-🗣️ Voice Cloning Model Comparison Dashboard
-=============================================
-Streamlit app to compare audio outputs from Orpheus, VoxCPM2, and VibeVoice
-across 12 test texts.
+🗣️ Voice Cloning Dashboard
+===========================
+Live voice cloning + batch comparison for Model 1, Model 2, and Model 3.
 
 Usage:
     1. Run the 3 batch notebooks in Colab → download the zip files
@@ -12,6 +11,11 @@ Usage:
            voxcpm2/   (test_01.wav ... test_12.wav + metadata.json)
            vibevoice/ (test_01.wav ... test_12.wav + metadata.json)
     3. Run:  streamlit run app.py
+
+Live cloning (per-model Python interpreters):
+    MODEL1_PYTHON=/path/to/orpheus-env/bin/python
+    MODEL2_PYTHON=/path/to/voxcpm2-env/bin/python
+    MODEL3_PYTHON=/path/to/vibevoice-env/bin/python
 """
 
 import streamlit as st
@@ -22,6 +26,8 @@ import subprocess
 import zipfile
 import tempfile
 import shutil
+import hashlib
+from datetime import datetime
 from pathlib import Path
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
@@ -248,9 +254,9 @@ st.markdown("""
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 MODELS = {
-    "orpheus": {"name": "Orpheus 3B", "color": "#f472b6", "css_class": "model-orpheus"},
-    "voxcpm2": {"name": "VoxCPM2 2B", "color": "#34d399", "css_class": "model-voxcpm2"},
-    "vibevoice": {"name": "VibeVoice Hindi 1.5B", "color": "#60a5fa", "css_class": "model-vibevoice"},
+    "orpheus": {"name": "Model 1", "color": "#f472b6", "css_class": "model-orpheus"},
+    "voxcpm2": {"name": "Model 2", "color": "#34d399", "css_class": "model-voxcpm2"},
+    "vibevoice": {"name": "Model 3 (Hindi)", "color": "#60a5fa", "css_class": "model-vibevoice"},
 }
 
 TEST_TEXTS = [
@@ -321,7 +327,7 @@ def resolve_model_dir(outputs_dir: str, model_key: str) -> str:
 
 
 # Default reference audio bundled in the outputs folder
-DEFAULT_REF_AUDIO = os.path.join("outputs", "orpheus_voxcpm_sample_audio.mp3")
+DEFAULT_REF_AUDIO = os.path.join("outputs", "sample_reference_audio.mp3")
 
 
 # ─── Metrics helpers ─────────────────────────────────────────────────────────
@@ -494,6 +500,95 @@ def metric_color(key: str, value) -> str:
     if norm >= 0.4:
         return "#fbbf24"
     return "#f87171"
+
+
+# ─── Live Cloning Helpers ────────────────────────────────────────────────────
+LIVE_OUTPUTS_DIR = os.path.join("outputs", "live")
+os.makedirs(LIVE_OUTPUTS_DIR, exist_ok=True)
+
+
+def resolve_inference_python(model_key: str) -> str:
+    """Return the Python interpreter for a model's inference subprocess.
+
+    Checks MODEL1_PYTHON / MODEL2_PYTHON / MODEL3_PYTHON env vars first (useful
+    when each model needs its own venv), then falls back to the current
+    interpreter.
+    """
+    env_vars = {
+        "orpheus":   "MODEL1_PYTHON",
+        "voxcpm2":   "MODEL2_PYTHON",
+        "vibevoice": "MODEL3_PYTHON",
+    }
+    env = os.environ.get(env_vars.get(model_key, ""), "")
+    if env and os.path.exists(env):
+        return env
+    return sys.executable
+
+
+def _save_ref_audio(audio_bytes: bytes, suffix: str = ".wav") -> str:
+    """Persist reference audio to LIVE_OUTPUTS_DIR, deduplicating by content.
+
+    Only writes a new file when the audio has actually changed — avoids
+    accumulating duplicate files on every Streamlit rerun.
+    """
+    h = hashlib.md5(audio_bytes).hexdigest()[:8]
+    if st.session_state.get("_live_ref_hash") == h:
+        saved = st.session_state.get("_live_ref_saved_path", "")
+        if saved and os.path.exists(saved):
+            return saved
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(LIVE_OUTPUTS_DIR, f"reference_{ts}_{h}{suffix}")
+    with open(path, "wb") as _f:
+        _f.write(audio_bytes)
+    st.session_state["_live_ref_hash"] = h
+    st.session_state["_live_ref_saved_path"] = path
+    return path
+
+
+def run_live_inference(
+    model_key: str,
+    ref_audio_path: str,
+    target_text: str,
+    ref_transcript: str = "",
+    output_path: str = "",
+    dry_run: bool = False,
+):
+    """Run an inference subprocess for `model_key`. Yields log lines.
+
+    The last yielded line is always ``"__EXIT__ <code>"``.
+    Running inference as a subprocess ensures VRAM is freed on completion and
+    isolates each model's package dependencies.
+
+    Pass dry_run=True to skip model loading and write a test tone instead —
+    useful for testing the full UI pipeline locally without a GPU.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    script_map = {
+        "orpheus":   "infer_model1.py",
+        "voxcpm2":   "infer_model2.py",
+        "vibevoice": "infer_model3.py",
+    }
+    script = os.path.join(here, script_map[model_key])
+    python = resolve_inference_python(model_key)
+    cmd = [
+        python, script,
+        "--ref-audio", ref_audio_path,
+        "--target-text", target_text,
+        "--output", output_path,
+    ]
+    if ref_transcript.strip():
+        cmd += ["--ref-transcript", ref_transcript]
+    if dry_run:
+        cmd.append("--dry-run")
+    proc = subprocess.Popen(
+        cmd, cwd=here,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
+    )
+    for line in iter(proc.stdout.readline, ""):
+        yield line.rstrip("\n")
+    proc.stdout.close()
+    yield f"__EXIT__ {proc.wait()}"
 
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -678,12 +773,198 @@ metrics = load_metrics(outputs_dir)
 st.markdown(
     """
     <div class="main-header">
-        <h1>🗣️ Voice Cloning Model Comparison</h1>
-        <p>Compare audio outputs from Orpheus, VoxCPM2, and VibeVoice across 12 test texts</p>
+        <h1>🗣️ Voice Cloning Dashboard</h1>
+        <p>Live voice cloning &amp; batch comparison — Model 1, Model 2, and Model 3</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
+
+# ─── Live Voice Cloning ──────────────────────────────────────────────────────
+st.markdown("## 🎙️ Live Voice Cloning")
+st.caption(
+    "Record or upload a voice sample, enter the text to speak, select a model, "
+    "and get cloned audio in real time. Recordings and outputs are saved to "
+    f"`{LIVE_OUTPUTS_DIR}/`."
+)
+
+with st.container():
+    col_live_ref, col_live_main = st.columns(2)
+
+    with col_live_ref:
+        st.markdown("**Step 1 — Reference Voice**")
+        _ltab_rec, _ltab_up = st.tabs(["🎙️ Record", "📁 Upload"])
+        with _ltab_rec:
+            live_recorded = st.audio_input(
+                "Click the mic icon to start recording",
+                key="live_mic_input",
+            )
+        with _ltab_up:
+            live_uploaded = st.file_uploader(
+                "Upload voice sample",
+                type=["wav", "mp3", "ogg", "flac", "m4a"],
+                key="live_file_input",
+            )
+
+        live_ref_bytes = None
+        if live_uploaded is not None:
+            live_ref_bytes = live_uploaded.getvalue()
+            _live_ref_path = _save_ref_audio(
+                live_ref_bytes, Path(live_uploaded.name).suffix or ".wav"
+            )
+            st.session_state["live_ref_bytes"] = live_ref_bytes
+            st.session_state["live_ref_path"] = _live_ref_path
+        elif live_recorded is not None:
+            live_ref_bytes = live_recorded.getvalue()
+            _live_ref_path = _save_ref_audio(live_ref_bytes, ".wav")
+            st.session_state["live_ref_bytes"] = live_ref_bytes
+            st.session_state["live_ref_path"] = _live_ref_path
+        elif "live_ref_bytes" in st.session_state:
+            live_ref_bytes = st.session_state["live_ref_bytes"]
+
+        if live_ref_bytes is not None:
+            st.audio(live_ref_bytes)
+            if "live_ref_path" in st.session_state:
+                st.caption(f"Saved: `{st.session_state['live_ref_path']}`")
+
+    with col_live_main:
+        st.markdown("**Step 2 — Text to Speak**")
+        live_target_text = st.text_area(
+            "Target text",
+            placeholder="Enter the text you want the cloned voice to say…",
+            height=100,
+            key="live_target_text",
+            label_visibility="collapsed",
+        )
+
+        st.markdown("**Step 3 — Select Model**")
+        live_model_choice = st.radio(
+            "Model",
+            ["Model 1", "Model 2", "Model 3 (Hindi)"],
+            horizontal=True,
+            key="live_model_radio",
+            label_visibility="collapsed",
+        )
+        live_model_key = {
+            "Model 1": "orpheus",
+            "Model 2": "voxcpm2",
+            "Model 3 (Hindi)": "vibevoice",
+        }[live_model_choice]
+
+        if live_model_key == "vibevoice":
+            st.info(
+                "Model 3 is specialised for **Hindi (Devanagari)**. "
+                "English text will produce low-quality output.",
+                icon="ℹ️",
+            )
+
+        live_ref_transcript = ""
+        if live_model_key in ("orpheus", "voxcpm2"):
+            _transcript_label = (
+                "Reference transcript — the words spoken in the recording (improves quality)"
+                if live_model_key == "orpheus"
+                else "Reference transcript (optional — enables ultimate cloning mode)"
+            )
+            live_ref_transcript = st.text_area(
+                _transcript_label,
+                placeholder="The exact words spoken in your reference audio…",
+                height=68,
+                key="live_ref_transcript",
+            )
+
+        _can_generate = live_ref_bytes is not None and bool(
+            (live_target_text or "").strip()
+        )
+        if not _can_generate:
+            st.caption(
+                "Provide a reference voice **and** target text to enable generation."
+            )
+
+        live_dry_run = st.checkbox(
+            "🧪 Dry run (no GPU / local testing)",
+            key="live_dry_run",
+            help="Skips model loading and writes a 2-second test tone. "
+                 "Use this to verify the full UI pipeline works without a GPU.",
+        )
+
+        live_generate_clicked = st.button(
+            "▶️ Generate Cloned Voice",
+            disabled=not _can_generate,
+            type="primary",
+            key="live_generate_btn",
+            use_container_width=True,
+        )
+
+if live_generate_clicked and live_ref_bytes is not None and (live_target_text or "").strip():
+    _live_ref_disk = st.session_state.get("live_ref_path", "")
+    if not _live_ref_disk or not os.path.exists(_live_ref_disk):
+        st.error(
+            "Reference audio file not found on disk — please re-record or re-upload."
+        )
+    else:
+        _live_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _model_tag = {"orpheus": "model1", "voxcpm2": "model2", "vibevoice": "model3"}.get(
+            live_model_key, live_model_key
+        )
+        _live_out = os.path.join(
+            LIVE_OUTPUTS_DIR, f"generated_{_model_tag}_{_live_ts}.wav"
+        )
+        _live_status = st.status(
+            f"Running {MODELS[live_model_key]['name']} inference…", expanded=True
+        )
+        _live_log: list = []
+        _live_log_box = _live_status.empty()
+        _live_exit = None
+        try:
+            for _line in run_live_inference(
+                live_model_key,
+                ref_audio_path=_live_ref_disk,
+                target_text=live_target_text,
+                ref_transcript=live_ref_transcript,
+                output_path=_live_out,
+                dry_run=live_dry_run,
+            ):
+                if _line.startswith("__EXIT__"):
+                    _live_exit = int(_line.split()[1])
+                    break
+                _live_log.append(_line)
+                _live_log_box.code("\n".join(_live_log[-20:]))
+        except FileNotFoundError as _exc:
+            _live_status.update(label="❌ Inference script not found", state="error")
+            st.error(str(_exc))
+            _live_exit = -1
+        if _live_exit == 0 and os.path.exists(_live_out):
+            _live_status.update(
+                label=f"✅ Cloned with {MODELS[live_model_key]['name']}",
+                state="complete",
+            )
+            with open(_live_out, "rb") as _f:
+                _live_audio_bytes = _f.read()
+            st.audio(_live_audio_bytes, format="audio/wav")
+            st.download_button(
+                "⬇️ Download",
+                data=_live_audio_bytes,
+                file_name=os.path.basename(_live_out),
+                mime="audio/wav",
+                key="live_dl_btn",
+            )
+            st.caption(f"Saved to `{_live_out}`")
+            st.session_state["live_last_output"] = _live_out
+        elif _live_exit not in (None, 0, -1):
+            _live_status.update(
+                label=f"❌ Inference failed (exit {_live_exit})", state="error"
+            )
+elif (
+    not live_generate_clicked
+    and "live_last_output" in st.session_state
+    and os.path.exists(st.session_state["live_last_output"])
+):
+    with open(st.session_state["live_last_output"], "rb") as _f:
+        st.audio(_f.read(), format="audio/wav")
+    st.caption(f"Last output: `{st.session_state['live_last_output']}`")
+
+st.markdown("---")
+st.markdown("## 📊 Batch Comparison")
 
 # ─── Original Reference Audio Player ────────────────────────────────────────
 # Prefer an uploaded clip; otherwise fall back to the bundled sample audio.
@@ -996,8 +1277,8 @@ if any(model_available.values()):
 st.markdown("---")
 st.markdown(
     "<p style='text-align:center;color:#6b7280;font-size:0.8rem;'>"
-    "🗣️ Voice Cloning Model Comparison Dashboard &nbsp;•&nbsp; "
-    "Orpheus 3B &nbsp;|&nbsp; VoxCPM2 2B &nbsp;|&nbsp; VibeVoice Hindi 1.5B"
+    "🗣️ Voice Cloning Dashboard &nbsp;•&nbsp; "
+    "Model 1 &nbsp;|&nbsp; Model 2 &nbsp;|&nbsp; Model 3"
     "</p>",
     unsafe_allow_html=True,
 )

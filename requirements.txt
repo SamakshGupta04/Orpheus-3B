@@ -1,1 +1,28 @@
-streamlit>=1.58
+# Core app
+streamlit>=1.31
+
+# Audio processing (needed by all three inference scripts)
+librosa
+soundfile
+numpy
+
+# ── Model-specific packages ──────────────────────────────────────────────────
+# Install these in the appropriate venv(s) on the GPU VM.
+#
+# Model 1 — Orpheus 3B (unsloth + SNAC codec):
+#   pip install unsloth snac
+#
+# Model 2 — VoxCPM2 2B:
+#   pip install voxcpm
+#
+# Model 3 — VibeVoice Hindi 1.5B (not on PyPI, install from git):
+#   pip install git+https://github.com/vibevoice-community/VibeVoice.git
+#
+# All three need PyTorch with CUDA:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# Set per-model interpreter paths to isolate conflicting deps (optional but
+# recommended if dependency versions clash):
+#   export MODEL1_PYTHON=/path/to/orpheus-env/bin/python
+#   export MODEL2_PYTHON=/path/to/voxcpm2-env/bin/python
+#   export MODEL3_PYTHON=/path/to/vibevoice-env/bin/python
