@@ -1,0 +1,52 @@
+\section{Introduction}
+
+Text-to-speech (TTS) synthesis has undergone a fundamental shift from rule-based concatenative systems toward neural architectures
+capable of producing perceptually indistinguishable speech. Within this trajectory, zero-shot voice cloning occupies a distinct
+technical position: given only a brief reference recording---typically 20 to 30 seconds of natural speech---a model must condition
+its generative process to reproduce the speaker's identity across arbitrary target text, without any speaker-specific fine-tuning.
+The challenge is not simply one of signal reconstruction. It requires a generative model to disentangle speaker-characteristic
+acoustic features (timbre, prosodic rhythm, vocal tract resonance) from linguistic content, encode them into a stable
+representational space, and faithfully project them onto novel utterances the reference speaker never produced.
+
+The emergence of large-scale neural codec language models \cite{wang2023neural, borsos2023audiolm}, flow-matching decoders
+\cite{le2024voicebox}, and diffusion-based vocoders has produced a generation of zero-shot systems achieving mean opinion scores
+competitive with ground-truth recordings in controlled English-language evaluations. Yet the field's evaluation practices remain
+inconsistently scoped. Most published benchmarks operate on clean studio-quality reference audio, target a single high-resource
+language, and report MOS under conditions that may not reflect deployment variability. The problem deepens in multilingual contexts.
+Hindi, spoken by over 600 million people, presents phonological properties---retroflex consonants, vowel nasalization, and
+Devanagari-to-phoneme mapping ambiguities---that stress both acoustic modeling and ASR-based intelligibility measurement in ways
+English benchmarks do not reveal. A model that achieves low word error rate in English may degrade substantially when tasked with
+synthesizing Hindi text, particularly if the architecture has not been trained on phonologically diverse corpora.
+
+Speaker identity preservation compounds this difficulty. Reference audio clips of 20--30 seconds encode highly compressed
+speaker-characteristic information; the model's speaker encoder must extract a stable embedding from this limited evidence and
+maintain it across sentences of varying length and phonetic content. Cosine similarity computed over high-dimensional embedding
+vectors (derived from independent speaker verification models such as WavLM or ECAPA-TDNN \cite{chen2022wavlm, desplanques2020ecapa})
+provides a reproducible proxy for perceptual identity similarity, though it does not capture all dimensions of speaker recognition.
+Acoustic naturalness---the degree to which synthesized speech is free of artifacts, unnatural prosody, or spectral discontinuities---
+is equally difficult to operationalize at scale; neural MOS predictors such as UTMOS \cite{saeki2022utmos} enable non-intrusive
+quality estimation without costly human listening panels, though their reliability across languages remains an active research question.
+
+In this work, we conduct a systematic, multi-lingual empirical evaluation of three contemporary zero-shot voice cloning
+architectures: \textbf{Orpheus-3B} \cite{orpheus2024}, a large language model-based TTS system adapted for zero-shot speaker
+conditioning; \textbf{VoxtLM/VoxCPM2} \cite{voxcpm2024}, a codec-based generative model trained on diverse multilingual speech; and
+\textbf{VibeVoice}, a diffusion-based synthesis pipeline with a contrastive speaker encoder. Each system receives an identical
+20-to-30-second reference audio clip and a target text sequence; the synthesized output is evaluated across three complementary
+dimensions: speaker similarity (cosine distance in speaker embedding space), intelligibility (Word Error Rate for English and
+Character Error Rate for Hindi, both transcribed via Whisper ASR \cite{radford2023whisper}), and acoustic naturalness (UTMOS score).
+The use of CER rather than WER for Hindi is deliberate---Whisper's Hindi transcription output exhibits transliteration
+inconsistencies at the word boundary level, and character-level comparison isolates phoneme-fidelity from tokenization artifacts.
+
+The significance of this comparison extends beyond benchmarking. Each architecture embodies different inductive biases regarding the
+speaker conditioning mechanism, decoder design, and training regime. Orpheus-3B conditions generation autoregressively through
+speaker-prefixed token sequences; VoxCPM2 operates through a codec language model with cross-attention to a speaker prototype;
+VibeVoice uses a diffusion process guided by a contrastive speaker embedding. Identifying which of these mechanisms produces more
+stable identity preservation under a low-data reference condition, and whether that stability transfers across linguistic
+scripts, informs both model selection for deployment and the architectural choices most relevant for future multilingual TTS research.
+
+The remainder of this paper is organized as follows: Section~\ref{sec:related} reviews related literature on neural TTS, zero-shot
+speaker adaptation, and multilingual speech synthesis; Section~\ref{sec:methodology} details the experimental methodology,
+including dataset construction, preprocessing pipeline, and evaluation metric implementation; Section~\ref{sec:results} presents
+quantitative results across all three evaluation dimensions; Section~\ref{sec:discussion} analyzes performance trade-offs and
+architectural correlates of observed differences; Section~\ref{sec:conclusion} summarizes findings and outlines directions for
+future work.
