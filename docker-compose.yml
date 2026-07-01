@@ -16,7 +16,7 @@ services:
       args:
         CUDA_VERSION: cu121
     ports:
-      - "8501:8501"
+      - "8518:8501"
     environment:
       - AUTOSTART_MODELS=${AUTOSTART_MODELS:-all}
       - AUTOSTART_DRY_RUN=${AUTOSTART_DRY_RUN:-}
