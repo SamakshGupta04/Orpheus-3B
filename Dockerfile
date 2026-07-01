@@ -1,11 +1,18 @@
-# Voice Cloning Dashboard — full GPU image.
+# Voice Cloning Dashboard — GPU image.
 #
-# Bakes in the same layout as setup_vm.sh: a base Streamlit env plus three
-# isolated venvs (one per model, matching torch/transformer versions that
-# conflict with each other) and one for the heavy metrics stack. Each model
-# runs as its own warm HTTP server (infer_model{1,2,3}.py --serve), started
-# from the app's "Model Servers" panel — this image just makes sure the
-# right interpreter, ports, and deps exist for each.
+# Bakes in the same layout as setup_vm.sh: a base Streamlit env plus one
+# isolated venv per model (torch/transformer versions conflict between them)
+# and one for the heavy metrics stack. Each model runs as its own warm HTTP
+# server (infer_model{1,2,3}.py --serve), started from the app's "Model
+# Servers" panel — this image just makes sure the right interpreter, ports,
+# and deps exist for each.
+#
+# Model 1 (Orpheus) and Model 3 (VibeVoice) are currently DISABLED — their
+# venv-build RUN blocks are commented out below — because VM disk space is
+# tight. Only Model 2 (VoxCPM2) installs. DISABLED_MODELS=orpheus,vibevoice
+# (set near the bottom) tells app.py to grey those out in the UI instead of
+# ever trying to start them. To bring one back: uncomment its RUN block,
+# remove it from DISABLED_MODELS, and rebuild.
 #
 # Build (adjust CUDA_VERSION build-arg to match `nvidia-smi` on the host —
 # cu118 | cu121 | cu124):
@@ -56,11 +63,13 @@ RUN python3.12 -m venv /app/.venv-app && \
     /app/.venv-app/bin/pip install "streamlit>=1.31" librosa soundfile numpy
 
 # ── 1. Model 1 — Orpheus 3B (unsloth + SNAC) ─────────────────────────────────
-RUN python3.12 -m venv /app/.venv-model1 && \
-    /app/.venv-model1/bin/pip install --upgrade pip && \
-    /app/.venv-model1/bin/pip install torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/${CUDA_VERSION} && \
-    /app/.venv-model1/bin/pip install "unsloth[colab-new]" snac librosa soundfile numpy
+# DISABLED — disk space on the VM is tight. To re-enable: uncomment this block
+# AND drop "orpheus" from DISABLED_MODELS below.
+# RUN python3.12 -m venv /app/.venv-model1 && \
+#     /app/.venv-model1/bin/pip install --upgrade pip && \
+#     /app/.venv-model1/bin/pip install torch torchvision torchaudio \
+#         --index-url https://download.pytorch.org/whl/${CUDA_VERSION} && \
+#     /app/.venv-model1/bin/pip install "unsloth[colab-new]" snac librosa soundfile numpy
 
 # ── 2. Model 2 — VoxCPM2 2B ───────────────────────────────────────────────────
 RUN python3.12 -m venv /app/.venv-model2 && \
@@ -70,13 +79,15 @@ RUN python3.12 -m venv /app/.venv-model2 && \
     /app/.venv-model2/bin/pip install voxcpm librosa soundfile numpy
 
 # ── 3. Model 3 — VibeVoice Hindi 1.5B (not on PyPI) ──────────────────────────
-RUN python3.12 -m venv /app/.venv-model3 && \
-    /app/.venv-model3/bin/pip install --upgrade pip && \
-    /app/.venv-model3/bin/pip install torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/${CUDA_VERSION} && \
-    /app/.venv-model3/bin/pip install \
-        "git+https://github.com/vibevoice-community/VibeVoice.git" \
-        librosa soundfile numpy
+# DISABLED — disk space on the VM is tight. To re-enable: uncomment this block
+# AND drop "vibevoice" from DISABLED_MODELS below.
+# RUN python3.12 -m venv /app/.venv-model3 && \
+#     /app/.venv-model3/bin/pip install --upgrade pip && \
+#     /app/.venv-model3/bin/pip install torch torchvision torchaudio \
+#         --index-url https://download.pytorch.org/whl/${CUDA_VERSION} && \
+#     /app/.venv-model3/bin/pip install \
+#         "git+https://github.com/vibevoice-community/VibeVoice.git" \
+#         librosa soundfile numpy
 
 # ── 4. Metrics stack (compute_metrics.py — SECS / WER / UTMOS) ───────────────
 COPY requirements-metrics.txt .
@@ -87,14 +98,17 @@ RUN python3.12 -m venv /app/.venv-metrics && \
 # ── 5. App source (copied last so code changes don't invalidate venv layers) ─
 COPY . .
 
-ENV MODEL1_PYTHON=/app/.venv-model1/bin/python \
-    MODEL2_PYTHON=/app/.venv-model2/bin/python \
-    MODEL3_PYTHON=/app/.venv-model3/bin/python \
+# MODEL1_PYTHON / MODEL3_PYTHON intentionally unset — .venv-model1/3 aren't
+# built (see the commented-out RUN blocks above). app.py checks
+# DISABLED_MODELS explicitly before ever touching those interpreter paths, so
+# leaving them unset here is enough; it never falls through to a broken path.
+ENV MODEL2_PYTHON=/app/.venv-model2/bin/python \
     METRICS_PYTHON=/app/.venv-metrics/bin/python \
     MODEL1_PORT=8001 \
     MODEL2_PORT=8002 \
     MODEL3_PORT=8003 \
-    AUTOSTART_MODELS=all
+    AUTOSTART_MODELS=all \
+    DISABLED_MODELS=orpheus,vibevoice
 
 # 8001-8003 are consumed internally over 127.0.0.1 by app.py — not published
 # by docker-compose, only documented here for anyone attaching a debugger.

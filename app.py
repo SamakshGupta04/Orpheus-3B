@@ -529,6 +529,18 @@ STATE_BADGES = {
     "error":   ("⚠️", "Error"),
 }
 
+# DISABLED_MODELS=orpheus,vibevoice (set in the Dockerfile when disk space is
+# tight and those venvs aren't built) — checked explicitly rather than
+# inferred from a missing venv path, so a local dev box with everything in
+# one venv doesn't get misread as "disabled".
+DISABLED_MODELS = {
+    k.strip() for k in os.environ.get("DISABLED_MODELS", "").split(",") if k.strip()
+}
+
+
+def is_model_disabled(model_key: str) -> bool:
+    return model_key in DISABLED_MODELS
+
 
 def resolve_inference_python(model_key: str) -> str:
     """Return the Python interpreter for a model's server subprocess.
@@ -595,6 +607,8 @@ def start_model_server(model_key: str, dry_run: bool = False) -> str:
     request. Idempotent: safe to call even if another session already
     started it.
     """
+    if is_model_disabled(model_key):
+        return "disabled"
     if get_model_health(model_key) is not None:
         return "already running"
     here = os.path.dirname(os.path.abspath(__file__))
@@ -765,6 +779,7 @@ if "_autostart_done" not in st.session_state:
             list(MODELS.keys()) if _autostart.lower() == "all"
             else [k.strip() for k in _autostart.split(",") if k.strip() in MODELS]
         )
+        _autostart_keys = [k for k in _autostart_keys if not is_model_disabled(k)]
         _autostart_dry = os.environ.get("AUTOSTART_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
         for _k in _autostart_keys:
             start_model_server(_k, dry_run=_autostart_dry)
@@ -971,6 +986,20 @@ _status_cols = st.columns(len(MODELS))
 for _mkey, _mcol in zip(MODELS, _status_cols):
     _minfo = MODELS[_mkey]
     with _mcol:
+        if is_model_disabled(_mkey):
+            st.markdown(
+                f"<div class='stats-card'><h3 style='color:#6b7280'>⬜</h3>"
+                f"<p>{_minfo['name']}<br>Not installed</p></div>",
+                unsafe_allow_html=True,
+            )
+            st.caption("Disabled in this build (disk space) — see Dockerfile.")
+            _bcol1, _bcol2 = st.columns(2)
+            with _bcol1:
+                st.button("▶️ Start", key=f"start_{_mkey}", use_container_width=True, disabled=True)
+            with _bcol2:
+                st.button("⏹️ Stop", key=f"stop_{_mkey}", use_container_width=True, disabled=True)
+            continue
+
         _health = get_model_health(_mkey)
         if _health is None:
             _badge, _label = "🔴", "Offline"
@@ -1067,18 +1096,20 @@ with st.container():
         )
 
         st.markdown("**Step 3 — Select Model**")
+        # Disabled models (DISABLED_MODELS, e.g. set by the Dockerfile when
+        # disk space is tight) aren't offered as a choice at all — falls back
+        # to the full list only in the pathological case where every model is
+        # disabled, so the radio always has at least one option.
+        _available_model_keys = [k for k in MODELS if not is_model_disabled(k)] or list(MODELS.keys())
+        _model_labels = [MODELS[k]["name"] for k in _available_model_keys]
         live_model_choice = st.radio(
             "Model",
-            ["Model 1", "Model 2", "Model 3 (Hindi)"],
+            _model_labels,
             horizontal=True,
             key="live_model_radio",
             label_visibility="collapsed",
         )
-        live_model_key = {
-            "Model 1": "orpheus",
-            "Model 2": "voxcpm2",
-            "Model 3 (Hindi)": "vibevoice",
-        }[live_model_choice]
+        live_model_key = _available_model_keys[_model_labels.index(live_model_choice)]
 
         if live_model_key == "vibevoice":
             st.info(
