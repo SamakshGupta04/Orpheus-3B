@@ -46,9 +46,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# ── 0. Base app deps (system Python — the container itself is the isolation) ──
-RUN python3.12 -m pip install --upgrade pip && \
-    python3.12 -m pip install "streamlit>=1.31" librosa soundfile numpy
+# ── 0. Base app deps ──────────────────────────────────────────────────────────
+# In its own venv, not system python3.12: software-properties-common (needed
+# above for the deadsnakes PPA) drags in an apt-managed python3-blinker, and
+# pip refuses to upgrade a distutils-installed package it can't safely
+# uninstall. A venv sidesteps that entirely instead of pip-flag-fighting it.
+RUN python3.12 -m venv /app/.venv-app && \
+    /app/.venv-app/bin/pip install --upgrade pip && \
+    /app/.venv-app/bin/pip install "streamlit>=1.31" librosa soundfile numpy
 
 # ── 1. Model 1 — Orpheus 3B (unsloth + SNAC) ─────────────────────────────────
 RUN python3.12 -m venv /app/.venv-model1 && \
@@ -99,5 +104,5 @@ EXPOSE 8501 8001 8002 8003
 # their parent by the time they're orphaned on restart/crash) since streamlit
 # runs as PID 1 otherwise.
 ENTRYPOINT ["tini", "--"]
-CMD ["python3.12", "-m", "streamlit", "run", "app.py", \
+CMD ["/app/.venv-app/bin/python", "-m", "streamlit", "run", "app.py", \
      "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
