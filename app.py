@@ -12,10 +12,15 @@ Usage:
            vibevoice/ (test_01.wav ... test_12.wav + metadata.json)
     3. Run:  streamlit run app.py
 
-Live cloning (per-model Python interpreters):
-    MODEL1_PYTHON=/path/to/orpheus-env/bin/python
+Live cloning runs each model as its own warm HTTP server (infer_model{1,2,3}.py
+--serve), started/stopped independently from the "Model Servers" panel so you
+can run all three at once or just one at a time to save VRAM.
+
+    MODEL1_PYTHON=/path/to/orpheus-env/bin/python     (per-model interpreter)
     MODEL2_PYTHON=/path/to/voxcpm2-env/bin/python
     MODEL3_PYTHON=/path/to/vibevoice-env/bin/python
+    MODEL1_PORT=8001  MODEL2_PORT=8002  MODEL3_PORT=8003  (server ports)
+    AUTOSTART_MODELS=all   (or a comma list, e.g. orpheus,voxcpm2 — Docker default)
 """
 
 import streamlit as st
@@ -27,6 +32,9 @@ import zipfile
 import tempfile
 import shutil
 import hashlib
+import time
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -506,9 +514,24 @@ def metric_color(key: str, value) -> str:
 LIVE_OUTPUTS_DIR = os.path.join("outputs", "live")
 os.makedirs(LIVE_OUTPUTS_DIR, exist_ok=True)
 
+MODEL_SCRIPTS = {
+    "orpheus":   "infer_model1.py",
+    "voxcpm2":   "infer_model2.py",
+    "vibevoice": "infer_model3.py",
+}
+MODEL_DEFAULT_PORTS = {"orpheus": 8001, "voxcpm2": 8002, "vibevoice": 8003}
+MODEL_PORT_ENV = {"orpheus": "MODEL1_PORT", "voxcpm2": "MODEL2_PORT", "vibevoice": "MODEL3_PORT"}
+
+STATE_BADGES = {
+    "loading": ("🟡", "Loading…"),
+    "ready":   ("🟢", "Online"),
+    "busy":    ("🔵", "Busy"),
+    "error":   ("⚠️", "Error"),
+}
+
 
 def resolve_inference_python(model_key: str) -> str:
-    """Return the Python interpreter for a model's inference subprocess.
+    """Return the Python interpreter for a model's server subprocess.
 
     Checks MODEL1_PYTHON / MODEL2_PYTHON / MODEL3_PYTHON env vars first (useful
     when each model needs its own venv), then falls back to the current
@@ -523,6 +546,189 @@ def resolve_inference_python(model_key: str) -> str:
     if env and os.path.exists(env):
         return env
     return sys.executable
+
+
+def resolve_model_port(model_key: str) -> int:
+    return int(os.environ.get(MODEL_PORT_ENV[model_key], MODEL_DEFAULT_PORTS[model_key]))
+
+
+def _model_request(model_key: str, method: str, path: str, payload: dict | None = None, timeout: float = 2.0):
+    """Low-level HTTP call to a model's warm server.
+
+    Returns (status_code, body_dict). Returns (None, None) if the server is
+    unreachable (offline) rather than raising — callers treat that as "offline".
+    """
+    port = resolve_model_port(model_key)
+    url = f"http://127.0.0.1:{port}{path}"
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        url, data=data, method=method,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+            return resp.status, (json.loads(body) if body else {})
+    except urllib.error.HTTPError as e:
+        body = e.read()
+        try:
+            return e.code, (json.loads(body) if body else {})
+        except json.JSONDecodeError:
+            return e.code, {}
+    except (urllib.error.URLError, ConnectionError, OSError, TimeoutError):
+        return None, None
+
+
+def get_model_health(model_key: str) -> dict | None:
+    """Returns the /health payload, or None if the server isn't reachable."""
+    status, body = _model_request(model_key, "GET", "/health", timeout=1.0)
+    if status is None:
+        return None
+    return body
+
+
+def start_model_server(model_key: str, dry_run: bool = False) -> str:
+    """Spawn model_key's server subprocess if it isn't already reachable.
+
+    Fire-and-forget — does not block on model load. The server is detached
+    (its own session) so it survives Streamlit reruns and outlives this
+    request. Idempotent: safe to call even if another session already
+    started it.
+    """
+    if get_model_health(model_key) is not None:
+        return "already running"
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(here, MODEL_SCRIPTS[model_key])
+    python = resolve_inference_python(model_key)
+    port = resolve_model_port(model_key)
+    cmd = [python, script, "--serve", "--port", str(port)]
+    if dry_run:
+        cmd.append("--dry-run")
+    log_dir = os.path.join(LIVE_OUTPUTS_DIR, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_f = open(os.path.join(log_dir, f"{model_key}.log"), "a")
+    kwargs = dict(cwd=here, stdout=log_f, stderr=subprocess.STDOUT)
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(cmd, **kwargs)
+    return "starting"
+
+
+def stop_model_server(model_key: str) -> str:
+    """Ask model_key's server to shut down. No-op if it's already offline."""
+    status, _ = _model_request(model_key, "POST", "/shutdown", payload={}, timeout=2.0)
+    return "already stopped" if status is None else "stopping"
+
+
+def wait_for_model_ready(model_key: str, timeout_s: float = 240.0):
+    """Poll model_key until it reaches 'ready' or 'error' (or times out).
+
+    Generator of log lines pulled from the server's own load-time log —
+    mirrors the streaming-log UX of the old one-shot subprocess.
+    """
+    label = MODELS[model_key]["name"]
+    start = time.time()
+    seen = 0
+    while time.time() - start < timeout_s:
+        health = get_model_health(model_key)
+        if health is None:
+            yield f"[{label}] waiting for server process to start…"
+            time.sleep(1.0)
+            continue
+        _, status_body = _model_request(model_key, "GET", "/status", timeout=1.5)
+        tail = (status_body or {}).get("log_tail", [])
+        if len(tail) > seen:
+            for line in tail[seen:]:
+                yield line
+            seen = len(tail)
+        state = health.get("model_state")
+        if state == "ready":
+            return
+        if state == "error":
+            yield f"[{label}] ERROR: {health.get('model_error')}"
+            return
+        time.sleep(1.0)
+    yield f"[{label}] Timed out waiting for the model to load."
+
+
+def run_live_inference(
+    model_key: str,
+    ref_audio_path: str,
+    target_text: str,
+    ref_transcript: str = "",
+    output_path: str = "",
+    dry_run: bool = False,
+):
+    """Submit an inference job to model_key's warm server and stream progress.
+
+    The model server must already be online (started from the Model Servers
+    panel) — this does not auto-start it, so a model can be kept offline to
+    save VRAM. The last yielded line is always ``"__EXIT__ <code>"``.
+
+    Completion is detected by polling for *this job's* `done` flag rather
+    than watching the server's busy->ready transition, so it's correct even
+    for jobs (e.g. dry-run) that finish before the first poll.
+    """
+    label = MODELS[model_key]["name"]
+    health = get_model_health(model_key)
+    if health is None:
+        yield f"[{label}] Server is offline — start it from the Model Servers panel above."
+        yield "__EXIT__ 1"
+        return
+    state = health.get("model_state")
+    if state == "error":
+        yield f"[{label}] Server failed to load: {health.get('model_error')}"
+        yield "__EXIT__ 1"
+        return
+    if state != "ready":
+        yield f"[{label}] Server is still loading — please wait."
+        yield "__EXIT__ 1"
+        return
+
+    payload = {
+        "ref_audio": ref_audio_path,
+        "ref_transcript": ref_transcript,
+        "target_text": target_text,
+        "output": output_path,
+    }
+    status, body = _model_request(model_key, "POST", "/infer", payload=payload, timeout=5.0)
+    if status is None:
+        yield f"[{label}] Could not reach server to submit job."
+        yield "__EXIT__ 1"
+        return
+    if status == 409:
+        yield f"[{label}] Server is busy with another request — try again shortly."
+        yield "__EXIT__ 1"
+        return
+    if status != 202 or not body or "job_id" not in body:
+        yield f"[{label}] Unexpected response starting job: {body}"
+        yield "__EXIT__ 1"
+        return
+
+    job_id = body["job_id"]
+    seen = 0
+    while True:
+        _, status_body = _model_request(model_key, "GET", f"/status?job_id={job_id}", timeout=3.0)
+        if not status_body:
+            time.sleep(0.4)
+            continue
+        job = status_body.get("job")
+        if job and job.get("id") == job_id:
+            log_lines = job.get("log", [])
+            if len(log_lines) > seen:
+                for line in log_lines[seen:]:
+                    yield line
+                seen = len(log_lines)
+            if job.get("done"):
+                if job.get("error"):
+                    yield f"[{label}] ERROR: {job['error']}"
+                    yield "__EXIT__ 1"
+                else:
+                    yield "__EXIT__ 0"
+                return
+        time.sleep(0.4)
 
 
 def _save_ref_audio(audio_bytes: bytes, suffix: str = ".wav") -> str:
@@ -545,50 +751,23 @@ def _save_ref_audio(audio_bytes: bytes, suffix: str = ".wav") -> str:
     return path
 
 
-def run_live_inference(
-    model_key: str,
-    ref_audio_path: str,
-    target_text: str,
-    ref_transcript: str = "",
-    output_path: str = "",
-    dry_run: bool = False,
-):
-    """Run an inference subprocess for `model_key`. Yields log lines.
-
-    The last yielded line is always ``"__EXIT__ <code>"``.
-    Running inference as a subprocess ensures VRAM is freed on completion and
-    isolates each model's package dependencies.
-
-    Pass dry_run=True to skip model loading and write a test tone instead —
-    useful for testing the full UI pipeline locally without a GPU.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    script_map = {
-        "orpheus":   "infer_model1.py",
-        "voxcpm2":   "infer_model2.py",
-        "vibevoice": "infer_model3.py",
-    }
-    script = os.path.join(here, script_map[model_key])
-    python = resolve_inference_python(model_key)
-    cmd = [
-        python, script,
-        "--ref-audio", ref_audio_path,
-        "--target-text", target_text,
-        "--output", output_path,
-    ]
-    if ref_transcript.strip():
-        cmd += ["--ref-transcript", ref_transcript]
-    if dry_run:
-        cmd.append("--dry-run")
-    proc = subprocess.Popen(
-        cmd, cwd=here,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
-    )
-    for line in iter(proc.stdout.readline, ""):
-        yield line.rstrip("\n")
-    proc.stdout.close()
-    yield f"__EXIT__ {proc.wait()}"
+# ─── Autostart Model Servers (Docker default) ────────────────────────────────
+# AUTOSTART_MODELS=all (or a comma list of orpheus,voxcpm2,vibevoice) starts
+# those servers once per session on first load, so a Docker deployment can
+# come up with all three warm without anyone clicking Start. Local dev
+# defaults to unset — nothing autostarts, and each model is toggled manually
+# from the Model Servers panel below.
+if "_autostart_done" not in st.session_state:
+    st.session_state["_autostart_done"] = True
+    _autostart = os.environ.get("AUTOSTART_MODELS", "").strip()
+    if _autostart:
+        _autostart_keys = (
+            list(MODELS.keys()) if _autostart.lower() == "all"
+            else [k.strip() for k in _autostart.split(",") if k.strip() in MODELS]
+        )
+        _autostart_dry = os.environ.get("AUTOSTART_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+        for _k in _autostart_keys:
+            start_model_server(_k, dry_run=_autostart_dry)
 
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -780,6 +959,56 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ─── Model Servers ────────────────────────────────────────────────────────────
+st.markdown("## 🖥️ Model Servers")
+st.caption(
+    "Each model runs as its own warm process, isolated in its own venv. Start "
+    "all three to run them simultaneously, or keep only one online at a time "
+    "to save VRAM — either way, live cloning below only works against models "
+    "that are Online."
+)
+_status_cols = st.columns(len(MODELS))
+for _mkey, _mcol in zip(MODELS, _status_cols):
+    _minfo = MODELS[_mkey]
+    with _mcol:
+        _health = get_model_health(_mkey)
+        if _health is None:
+            _badge, _label = "🔴", "Offline"
+        else:
+            _badge, _label = STATE_BADGES.get(_health.get("model_state"), ("⚪", "Unknown"))
+        st.markdown(
+            f"<div class='stats-card'><h3 style='color:{_minfo['color']}'>{_badge}</h3>"
+            f"<p>{_minfo['name']}<br>{_label}</p></div>",
+            unsafe_allow_html=True,
+        )
+        if _health is not None and _health.get("model_state") == "error":
+            st.caption(f"⚠️ {_health.get('model_error')}")
+        _bcol1, _bcol2 = st.columns(2)
+        with _bcol1:
+            if st.button("▶️ Start", key=f"start_{_mkey}", use_container_width=True,
+                         disabled=_health is not None):
+                start_model_server(_mkey, dry_run=st.session_state.get("live_dry_run", False))
+                _wait_status = st.status(f"Starting {_minfo['name']}…", expanded=True)
+                _wait_log = []
+                _wait_box = _wait_status.empty()
+                for _line in wait_for_model_ready(_mkey):
+                    _wait_log.append(_line)
+                    _wait_box.code("\n".join(_wait_log[-20:]))
+                if get_model_health(_mkey) and get_model_health(_mkey).get("model_state") == "ready":
+                    _wait_status.update(label=f"✅ {_minfo['name']} online", state="complete")
+                else:
+                    _wait_status.update(label=f"❌ {_minfo['name']} failed to start", state="error")
+                st.rerun()
+        with _bcol2:
+            if st.button("⏹️ Stop", key=f"stop_{_mkey}", use_container_width=True,
+                         disabled=_health is None):
+                stop_model_server(_mkey)
+                time.sleep(0.3)
+                st.rerun()
+if st.button("🔄 Refresh status"):
+    st.rerun()
+st.markdown("---")
+
 # ─── Live Voice Cloning ──────────────────────────────────────────────────────
 st.markdown("## 🎙️ Live Voice Cloning")
 st.caption(
@@ -872,10 +1101,21 @@ with st.container():
                 key="live_ref_transcript",
             )
 
-        _can_generate = live_ref_bytes is not None and bool(
-            (live_target_text or "").strip()
+        _live_model_health = get_model_health(live_model_key)
+        _live_model_ready = (
+            _live_model_health is not None and _live_model_health.get("model_state") == "ready"
         )
-        if not _can_generate:
+        _can_generate = (
+            live_ref_bytes is not None
+            and bool((live_target_text or "").strip())
+            and _live_model_ready
+        )
+        if not _live_model_ready:
+            st.caption(
+                f"⚠️ {MODELS[live_model_key]['name']} is not online — start it from the "
+                "Model Servers panel above before generating."
+            )
+        elif not _can_generate:
             st.caption(
                 "Provide a reference voice **and** target text to enable generation."
             )

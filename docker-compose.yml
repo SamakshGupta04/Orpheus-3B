@@ -1,0 +1,36 @@
+# docker compose up --build
+#
+# Requires the NVIDIA Container Toolkit on the host (nvidia-ctk / nvidia-docker2)
+# so `deploy.resources.reservations.devices` below can hand the container a GPU.
+#
+# AUTOSTART_MODELS=all (baked into the image) starts all three model servers
+# warm on container start. Override per-run to start only a subset, e.g.:
+#   AUTOSTART_MODELS=orpheus docker compose up
+# or unset it entirely and start/stop models manually from the "Model
+# Servers" panel in the app to keep VRAM usage to one model at a time.
+services:
+  voice-cloning:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CUDA_VERSION: cu121
+    ports:
+      - "8501:8501"
+    environment:
+      - AUTOSTART_MODELS=${AUTOSTART_MODELS:-all}
+      - AUTOSTART_DRY_RUN=${AUTOSTART_DRY_RUN:-}
+    volumes:
+      - ./outputs:/app/outputs
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
