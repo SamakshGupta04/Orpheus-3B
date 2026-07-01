@@ -1,0 +1,63 @@
+# Templated at container startup by docker-entrypoint.sh, which substitutes
+# __API_KEY__ with the real $API_KEY env var and writes the result to
+# /etc/nginx/nginx.conf. This is the ONLY port published outside the
+# container (8512) — everything else (Streamlit on 8501, model servers on
+# 8001-8003) stays on 127.0.0.1 and is reached only through here.
+#
+# /api/<model>/... requires a matching X-API-Key header. "/" (the Streamlit
+# UI) does not — a browser has no way to attach a custom header, and the
+# dashboard is meant for a human, not a bearer of the key.
+#
+# Model ports below assume the Dockerfile's default MODEL1/2/3_PORT values
+# (8001/8002/8003) — if those are overridden, update this file too.
+worker_processes 1;
+pid /run/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Reference audio uploads can be several MB — nginx's 1MB default would
+    # silently reject them with a 413.
+    client_max_body_size 200M;
+    access_log off;
+
+    server {
+        listen 8512;
+
+        location /api/orpheus/ {
+            if ($http_x_api_key != "__API_KEY__") { return 401; }
+            proxy_pass http://127.0.0.1:8001/;
+            proxy_read_timeout 300s;
+        }
+        location /api/voxcpm2/ {
+            if ($http_x_api_key != "__API_KEY__") { return 401; }
+            proxy_pass http://127.0.0.1:8002/;
+            proxy_read_timeout 300s;
+        }
+        location /api/vibevoice/ {
+            if ($http_x_api_key != "__API_KEY__") { return 401; }
+            proxy_pass http://127.0.0.1:8003/;
+            proxy_read_timeout 300s;
+        }
+        location /api/ {
+            return 404;
+        }
+
+        # Streamlit dashboard — needs the WebSocket upgrade headers or the
+        # page loads but every interaction silently does nothing.
+        location / {
+            proxy_pass http://127.0.0.1:8501/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 86400;
+        }
+    }
+}

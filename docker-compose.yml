@@ -8,6 +8,11 @@
 #   AUTOSTART_MODELS=orpheus docker compose up
 # or unset it entirely and start/stop models manually from the "Model
 # Servers" panel in the app to keep VRAM usage to one model at a time.
+#
+# 8001/8002/8003 (per-model HTTP APIs, for direct testing e.g. via Postman)
+# are published bound to 127.0.0.1 on the VM — reachable only via an SSH
+# tunnel (ssh -L 8002:localhost:8002 ...), never from the open network. These
+# endpoints have no auth, so don't widen that binding without adding some.
 services:
   voice-cloning:
     build:
@@ -17,6 +22,9 @@ services:
         CUDA_VERSION: cu121
     ports:
       - "8518:8501"
+      - "127.0.0.1:8001:8001"   # Model 1 (Orpheus) — currently disabled, harmless if unused
+      - "127.0.0.1:8002:8002"   # Model 2 (VoxCPM2)
+      - "127.0.0.1:8003:8003"   # Model 3 (VibeVoice) — currently disabled, harmless if unused
     environment:
       - AUTOSTART_MODELS=${AUTOSTART_MODELS:-all}
       - AUTOSTART_DRY_RUN=${AUTOSTART_DRY_RUN:-}

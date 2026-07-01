@@ -14,12 +14,21 @@
 # ever trying to start them. To bring one back: uncomment its RUN block,
 # remove it from DISABLED_MODELS, and rebuild.
 #
+# Only ONE port is published: 8512, an in-container nginx gateway (see
+# nginx.conf.template + docker-entrypoint.sh) that routes "/" to Streamlit
+# and "/api/<orpheus|voxcpm2|vibevoice>/..." to that model's own HTTP API
+# (proxying to 127.0.0.1:8001/8002/8003, which stay unpublished). The /api/*
+# routes require an "X-API-Key" header matching the API_KEY env var — the
+# container refuses to start without it set. "/" (the dashboard) needs no
+# key; app.py's own calls to the model servers bypass nginx entirely (same
+# container, loopback) so they don't need one either.
+#
 # Build (adjust CUDA_VERSION build-arg to match `nvidia-smi` on the host —
 # cu118 | cu121 | cu124):
 #   docker build --build-arg CUDA_VERSION=cu121 -t voice-cloning:full .
 #
 # Run (needs nvidia-container-toolkit on the host):
-#   docker run --gpus all -p 8501:8501 \
+#   docker run --gpus all -p 8512:8512 -e API_KEY=$(openssl rand -hex 32) \
 #       -v $(pwd)/outputs:/app/outputs \
 #       -v hf-cache:/root/.cache/huggingface \
 #       voice-cloning:full
@@ -42,12 +51,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1
 
 # ── System deps + Python 3.12 (matches .python-version; Ubuntu 22.04 ships 3.10) ──
+# nginx-light (not full nginx): just a reverse proxy + WebSocket upgrade for
+# Streamlit here, none of the extra modules (image-filter, xslt, geoip...)
+# the full package pulls in — disk space on this VM is already tight.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.12 python3.12-venv python3.12-dev \
-        build-essential ffmpeg libsndfile1 git curl tini \
+        build-essential ffmpeg libsndfile1 git curl tini nginx-light \
     && rm -rf /var/lib/apt/lists/* \
     && python3.12 -m ensurepip --upgrade
 
@@ -98,25 +110,32 @@ RUN python3.12 -m venv /app/.venv-metrics && \
 # ── 5. App source (copied last so code changes don't invalidate venv layers) ─
 COPY . .
 
+RUN chmod +x /app/docker-entrypoint.sh \
+    && rm -f /etc/nginx/sites-enabled/default
+
 # MODEL1_PYTHON / MODEL3_PYTHON intentionally unset — .venv-model1/3 aren't
 # built (see the commented-out RUN blocks above). app.py checks
 # DISABLED_MODELS explicitly before ever touching those interpreter paths, so
 # leaving them unset here is enough; it never falls through to a broken path.
+#
+# API_KEY has NO default — docker-entrypoint.sh refuses to start without one
+# set at `docker run`/compose time. Don't bake a real key into the image.
 ENV MODEL2_PYTHON=/app/.venv-model2/bin/python \
     METRICS_PYTHON=/app/.venv-metrics/bin/python \
     MODEL1_PORT=8001 \
     MODEL2_PORT=8002 \
     MODEL3_PORT=8003 \
     AUTOSTART_MODELS=all \
-    DISABLED_MODELS=orpheus,vibevoice
+    DISABLED_MODELS=orpheus,vibevoice \
+    API_KEY=
 
-# 8001-8003 are consumed internally over 127.0.0.1 by app.py — not published
-# by docker-compose, only documented here for anyone attaching a debugger.
-EXPOSE 8501 8001 8002 8003
+# Only 8512 (the nginx gateway) is meant to be published. 8501/8001-8003
+# stay on 127.0.0.1 inside the container — nginx and app.py reach them over
+# loopback; nothing outside the container can reach them directly.
+EXPOSE 8512
 
-# tini reaps the detached model-server subprocesses app.py spawns (it isn't
-# their parent by the time they're orphaned on restart/crash) since streamlit
-# runs as PID 1 otherwise.
-ENTRYPOINT ["tini", "--"]
-CMD ["/app/.venv-app/bin/python", "-m", "streamlit", "run", "app.py", \
-     "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+# tini (PID 1) reaps both nginx's forked worker processes and any detached
+# model-server subprocesses app.py spawns. docker-entrypoint.sh starts nginx
+# + Streamlit and exits (taking the container down for a clean restart) if
+# either one dies.
+ENTRYPOINT ["tini", "--", "/app/docker-entrypoint.sh"]
